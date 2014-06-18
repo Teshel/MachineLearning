@@ -6,22 +6,22 @@ require './util.rb'
 class Application
 	attr_accessor :words, :sentence
 
-	def initialize(hmm_filename, word_filename, input_folder)
+	def initialize(options={})
+		defaults options, {:input_folder => "tst"}
+
 		# view settings
 		@horizontal_border = "─"
 		@border = "│"
 		@log_view_max = 6
-		@sentence_view_max = 10
+		@sentences_view_max = 10
 		@v_max = 10
 		@cell_size = 6
 		@progress_status = ""
 
 		# load input files
-		@files = find_input_files_from(input_folder)
+		@files = find_input_files_from(options[:input_folder])
 		@total_files = @files.length
 		@analyzed_files = 0
-
-		# model manager -- handles file I/O and creating HMMs
 
 		# initial log
 		@log = ["Loading HMM parameters... "]
@@ -46,21 +46,18 @@ class Application
 			"eight" => 8,
 			"nine" => 9
 		}
-		@v = []
 		@blank_line = @border + (" "*(@grid_width-1)) + @border + nl
+
+		# viterbi matrix?
+		@v = []
 
 		# display before loading the HMM because it takes a while
 		display()
 
-		# now load the HMM and use the dictionary to create words
-		@models = read_multi_hmm_file(hmm_filename)
-		@words = make_hmm_words(word_filename, @models)
+		# model manager -- handles file I/O and creating HMMs
+		@manager = ModelManager.new(options)
 		
-		@bigram_file = "bigram.txt"
-		@sentence_hmm = SentenceHMM.new()
-		@sentence_hmm.make_bigram()
 
-		
 	end
 
 	def display()
@@ -74,7 +71,7 @@ class Application
 		#screen << viterbi_grid()
 
 		# most likely sentences for a given data file
-		sentences_view = viewize(@sentences.drop([0, sentences_view.length-@sentence_view_max].max))
+		sentences_view = viewize(@sentences.drop([0, @sentences.length-@sentences_view_max].max))
 		screen += sentences_view
 		# add blank spaces if the sentences view is shorter than @sentences_view_max
 		num_blanks = [(@sentences_view_max - sentences_view.length), 0].max
@@ -82,7 +79,7 @@ class Application
 
 		# log viewer
 		# drop old entries that exceed the view size
-		log_view = viewize(@log.drop([0, log_view.length-@log_view_max].max))
+		log_view = viewize(@log.drop([0, @log.length-@log_view_max].max))
 		# add blank spaces if the log is shorter than @log_view_max
 		num_blanks = [(@log_view_max - log_view.length), 0].max
 		screen += Array.new(num_blanks, @blank_line)
@@ -198,81 +195,17 @@ class Application
 		i
 	end
 
-	def make_bigram()
-		@sentence = HMM.new
-		@word_starting_loc = {}
-		@word_ending_loc = {}
-
-		@words = @words.each_value { |word| puts("before: #{word.states.length} states, #{word.state_transitions.length} trans"); word = word + @models["sp"] }
-
-		# need to make a huge transition matrix from all of the words
-		# and use the bigram.txt to set the transitions between words
-		@words["<s>"] = @models["sil"]
-		@words.each_pair { |word_name, word_hmm| puts("#{word_name}: #{word_hmm.states.length} states, #{word_hmm.state_transitions.length} trans"); @sentence.states += word_hmm.states }
-		@sentence.state_transitions = Array.new(@sentence.states.length) { Array.new(@sentence.states.length, 0) }
-
-		# copy each word's transition matrix to the new huge sentence HMM
-		offset = 0
-		@words.each_pair do |word_name, word_hmm|
-			copy_matrix(@sentence.state_transitions, word_hmm.state_transitions, offset)
-
-			# need a hash to store the starting location of each word
-			@word_ending_loc[offset+word_hmm.states.length-1] = word_name
-			@word_starting_loc[offset] = word_name
-			word_hmm.offset = offset
-
-			# state_transitions is 1 too large because it includes the end state
-			# (which does not actually exist)
-			offset += word_hmm.states.length
-		end	
-
-		# now use the bigram file to set the transitions between words
-		file = File.new(@bigram_file, "r")
-
-		while (line = file.gets)
-			# tab delimited
-			parts = line.split("\t")
-			if parts.length == 3
-				# 	#transition_matrix[from_state][to_state] = value
-				# 	@word_transitions[from_word][to_word] = value
-				# 	# need to record what state words end so that we can find which words are being said later on
-
-				if @words[parts[0]]
-					# transition should be from the end of the word
-					from = @words[parts[0]].offset + @words[parts[0]].states.length - 1
-				end
-
-				if @words[parts[1]]
-					# transition should be to the beginning of the other word
-					to = @words[parts[1]].offset
-				end
-
-				# from and to will be nil if the line contains words that aren't in @words
-				if from and to
-					#if @sentence.state_transitions[from][to] == 0
-						trans = @words[parts[0]].end_transition
-						@sentence.state_transitions[from][to] = parts[2].to_f * trans
-					#else
-						# if it already exists, it must be the transition to
-						# the end state. need to 
-					#	@sentence.state_transitions[from][to] *= parts[2].to_f
-					#end
-				end
-			end
-		end
-	end
-
 	# multi_test_input_files
 	def run
 		@files.each do |filename|
 			@log << "Analyzing file #{filename}"
 			display
-			inputs = read_input_file(filename)
+			inputs = @manager.read_input_file(filename)
 			#results = @words.each_pair.map {|k,w| [k, gaussian_forward(inputs, w)] }.sort_by{|a| a[1]}.reverse
 			# @log << inputs.length.to_s
 			# @log << inputs.first.count.to_s
 			display
-			result = gaussian_viterbi(inputs, @sentence)
+			result = gaussian_viterbi(inputs, @manager.sentence)
 			#@log << "\n#{filename}: #{results[0][0]}:#{results[0][1].round(2)}, #{results[1][0]}:#{results[1][1].round(2)}"
 			@log << "\n#{filename}: #{result}"
 			# observed = results.first.first
@@ -287,8 +220,6 @@ class Application
 			display
 		end
 	end
-
-	
 
 	def gaussian_viterbi(obs, hmm)
 		# first step of the algorithm is to initialize the starting state
@@ -371,7 +302,6 @@ class Application
 			# find the best sentence
 			best_sentence_index = max_index
 			#@progress_status = "Best Sentence Index: #{best_sentence_index}"
-			sentence = []
 			paths[best_sentence_index].each do |word_index|
 				word = @word_ending_loc[word_index]
 				sentence << "#{word}(#{word_index})" if word
@@ -383,6 +313,23 @@ class Application
 			paths = newpath
 		end
 		puts ""
+	end
+
+	def read_input_file(filename)
+		file = File.new(filename, "r")
+		inputs = []
+
+		header = file.gets
+		while (line = file.gets)
+			inputs << Matrix.column_vector(line.split(" ").map {|n| n.to_f})
+		end
+
+		inputs
+	end
+
+	def find_input_files_from(folder)
+		txtfiles = File.join(folder, "**", "*.txt")
+		Dir.glob(txtfiles)
 	end
 end
 

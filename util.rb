@@ -1,6 +1,18 @@
 def ld
-	load './viterbi.rb'
-	load './hmm.rb'
+	if $quickload
+		$quickload.each do |file|
+			load file
+		end
+	end
+end
+
+def quickload(file)
+	$quickload = [] unless $quickload
+	$quickload << file unless $quickload.include? file
+end
+
+def ql(file)
+	quickload(file)
 end
 
 def defaults(h, d)

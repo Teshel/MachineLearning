@@ -1,7 +1,7 @@
 require 'matrix.rb'
 require './util.rb'
 
-
+include MatrixExtras
 
 class State
 	attr_accessor :mixtures
@@ -160,42 +160,25 @@ class HMM
 end
 
 class ModelManager
-	def initialize(options)
-		defaults options,
+	attr_accessor :models, :words, :sentence
+
+	def initialize(options={})
+		@options = options
+		defaults @options,
 			{:hmm_filename => "hmm.txt",
 			:word_filename => "dictionary.txt",
-			:input_folder => "tst",
 			:bigram_filename => "bigram.txt"}
 
-
 		# HMM data structures
-		@models = []
-	end
 
-	def find_input_files_from(folder)
-		txtfiles = File.join(folder, "**", "*.txt")
-		Dir.glob(txtfiles)
-	end
+		# create phoneme HMMs
+		@models = read_multi_hmm_file(@options[:hmm_filename])
 
-	# file I/O
-	def read_hmm_file(filename)
-		file = File.new(filename, "r")
-		model = HMM.new
+		# now use the dictionary to create words
+		@words = make_hmm_words(options[:word_filename], @models)
 
-		while (line = file.gets)
-			if line =~ /^~(.+) "(.+)"/
-				model.switch_emission($2)
-			elsif line =~ /\<([A-Z]+)\>(.+)$/
-				if current_model
-					current_model.set($1, $2)
-				end
-			else
-				current_model.update_last(line.split(" ").map { |n| n.to_f }) if current_model
-			end
-		end
-		file.close
-
-		models
+		# construct a sentence HMM from the words
+		@sentence = SentenceHMM.new(options[:bigram_filename], @words, @models)
 	end
 
 	# multiple HMMs
@@ -234,28 +217,21 @@ class ModelManager
 		end
 		word_hmms
 	end
-
-	def read_input_file(filename)
-		file = File.new(filename, "r")
-		inputs = []
-
-		header = file.gets
-		while (line = file.gets)
-			inputs << Matrix.column_vector(line.split(" ").map {|n| n.to_f})
-		end
-
-		inputs
-	end
 end
 
-class SentenceHMM < PhonemeHMM
-	def initialize(phonemes, word_file, bigram_file)
+class SentenceHMM < HMM
+	def initialize(bigram_file, words, models)
+		super()
+
 		@words = []
+		@models = models
 		@bigram_file = bigram_file
 		@word_starting_loc = {}
 		@word_ending_loc = {}
 
-		@words = @words.each_value { |word| word = word + @models["sp"] }
+		# modify the words array in place and set @words to that
+		# (need to add "sp" silence HMMs to the end of each word)
+		@words = words.each_value { |word| word = word + @models["sp"] }
 
 		# need to make a huge transition matrix from all of the words
 		# and use the bigram.txt to set the transitions between words
