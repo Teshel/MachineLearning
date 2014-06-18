@@ -4,7 +4,7 @@ require './hmm.rb'
 require './util.rb'
 
 class Application
-	attr_accessor :words, :sentence
+	attr_accessor :words, :manager, :sentences, :v
 
 	def initialize(options={})
 		defaults options, {:input_folder => "tst"}
@@ -57,7 +57,7 @@ class Application
 		# model manager -- handles file I/O and creating HMMs
 		@manager = ModelManager.new(options)
 		
-
+		run
 	end
 
 	def display()
@@ -71,11 +71,13 @@ class Application
 		#screen << viterbi_grid()
 
 		# most likely sentences for a given data file
-		sentences_view = viewize(@sentences.drop([0, @sentences.length-@sentences_view_max].max))
+		sentences_view = viewize(@sentences.drop([0, @sentences.length-@sentences_view_max].max).map{ |s_a| s_a.join(" ") })
 		screen += sentences_view
 		# add blank spaces if the sentences view is shorter than @sentences_view_max
 		num_blanks = [(@sentences_view_max - sentences_view.length), 0].max
 		screen += Array.new(num_blanks, @blank_line)
+
+		screen << nl + hr + nl
 
 		# log viewer
 		# drop old entries that exceed the view size
@@ -170,7 +172,7 @@ class Application
 	def viterbi_footer
 		screen_half = (@grid_width-@border.length)/2
 		left_side = (" #{@analyzed_files}/#{@total_files} files analyzed").ljust(screen_half)
-		right_side = @progress_status.rjust(screen_half)
+		right_side = "#{@progress_status} ".rjust(screen_half)
 		borderize(left_side + right_side)
 	end
 
@@ -197,14 +199,17 @@ class Application
 
 	# multi_test_input_files
 	def run
-		@files.each do |filename|
+		#@files.each do |filename|
+		filename = "tst_viterbi/f/ak/44z5938.txt"
 			@log << "Analyzing file #{filename}"
 			display
-			inputs = @manager.read_input_file(filename)
+			inputs = read_input_file(filename)
+			
+
 			#results = @words.each_pair.map {|k,w| [k, gaussian_forward(inputs, w)] }.sort_by{|a| a[1]}.reverse
 			# @log << inputs.length.to_s
 			# @log << inputs.first.count.to_s
-			display
+			
 			result = gaussian_viterbi(inputs, @manager.sentence)
 			#@log << "\n#{filename}: #{results[0][0]}:#{results[0][1].round(2)}, #{results[1][0]}:#{results[1][1].round(2)}"
 			@log << "\n#{filename}: #{result}"
@@ -218,7 +223,7 @@ class Application
 			# end
 			@analyzed_files += 1
 			display
-		end
+		#end
 	end
 
 	def gaussian_viterbi(obs, hmm)
@@ -227,9 +232,8 @@ class Application
 		@v = Array.new(1) { Array.new(hmm.states.length, 0) }
 		paths = []
 		newpath = []
-		not_zeroes_initial = []
-		sentence = []
-		@sentences << sentence
+		view_sentence_index = @sentences.length
+		best_sentence_index = 0
 
 		# initial
 		# if the state is not the start of a word, it should have an
@@ -238,9 +242,9 @@ class Application
 			if obs and obs[0]
 				# need a function that checks to see if state_index is
 				# the start of a word
-				if @word_starting_loc[index]
+				if @manager.word_starting_loc[index]
 					@v[0][index] = state.weighted_pdf(obs[0])
-					not_zeroes_initial << index
+					#not_zeroes_initial << index
 				else
 					@v[0][index] = 0
 				end
@@ -250,6 +254,8 @@ class Application
 				display
 			end
 		end
+
+		max_value = nil
 
 		obs[1..-1].each_with_index do |data, index|
 			#print "."
@@ -279,14 +285,32 @@ class Application
 				hmm.states.each_with_index do |s2, si2|
 					prev_prob = @v[index][si2]
 					#@log << "previous probability: #{prev_prob}"
-
+					# need to check for 0 here
+					# or use infinity
 					state_trans = safe_log(hmm.state_transitions[si2][state_index])
-
-					arr << [(prev_prob + state_trans + pdf), si2]
+					if prev_prob != 0 and pdf != 0 and state_trans != 0
+						arr << [(prev_prob + state_trans + pdf), si2]
+					else
+						arr << [0, si2]
+					end
 				end
 
-				max_prev_state = arr.max { |a, b| a.first <=> b.first }
+				# definitely wrong because it will always pick states that are 0
+
+				# max_prev_state = arr.max do |a, b|
+				# 	if a == 0
+				# 		-1
+				# 	else
+				# 		a.first <=> b.first
+				# 	end
+				# end
+
+				max_prev_state = arr.map { |a| a.first == 0 ? [-Infin, a.last] : a }.max 
+				#local_max = 0
+				#arr.each do |a|
 				
+				#end
+
 				if max_value == nil or max_prev_state.first > max_value
 					max_value = max_prev_state.first
 					max_index = max_prev_state.last
@@ -296,23 +320,36 @@ class Application
 				newpath[state_index] = paths[max_prev_state.last] + [state_index]
 
 				# show conclusions up to this observation row
-				display
+				#display
 			end
 
 			# find the best sentence
 			best_sentence_index = max_index
 			#@progress_status = "Best Sentence Index: #{best_sentence_index}"
-			paths[best_sentence_index].each do |word_index|
-				word = @word_ending_loc[word_index]
-				sentence << "#{word}(#{word_index})" if word
-			end
+			 @sentences[view_sentence_index] = []
+			 paths[best_sentence_index].each do |word_index|
+			 	word = @manager.word_ending_loc[word_index]
+			 	@sentences[view_sentence_index] << "#{word}" if word
+			 end
+
+			#sentence = sentence_array.join(" ")
 
 			#@best_sentence = sentence.join(" ")
-
 			# new paths become the old
 			paths = newpath
 		end
-		puts ""
+
+		sentence = []
+		paths[best_sentence_index].each do |word_index|
+			word = @manager.word_ending_loc[word_index]
+			if word
+				sentence << "#{word_index}(#{word})" 
+			else
+				sentence << "#{word_index}"
+			end
+		end
+		@sentences << sentence
+		sentence.join(" ")
 	end
 
 	def read_input_file(filename)

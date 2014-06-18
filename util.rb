@@ -19,6 +19,8 @@ def defaults(h, d)
 	d.each_key {|k| h[k] ||= d[k]}
 end
 
+Infin = (1.0/0.0) unless defined? Infin
+
 module MatrixExtras
 	# general math helper functions
 

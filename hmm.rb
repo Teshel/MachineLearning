@@ -181,6 +181,14 @@ class ModelManager
 		@sentence = SentenceHMM.new(options[:bigram_filename], @words, @models)
 	end
 
+	def word_starting_loc
+		@sentence.word_starting_loc
+	end
+
+	def word_ending_loc
+		@sentence.word_ending_loc
+	end
+
 	# multiple HMMs
 	# constructs an array of HMMs for each phoneme
 	def read_multi_hmm_file(filename)
@@ -213,17 +221,21 @@ class ModelManager
 			word, parts = line.split("\t")
 			#puts "word: #{word}"
 			#puts "parts: #{parts}"
-			word_hmms[word] = parts.split(" ").map{|p| phonemes[p]}.inject(:+)
+			parts_array = parts.split(" ")
+			parts_array << "sp" if parts_array.last != "sp"
+			word_hmms[word] = parts_array.map{|p| phonemes[p]}.inject(:+)
 		end
 		word_hmms
 	end
 end
 
 class SentenceHMM < HMM
+	attr_accessor :word_starting_loc, :word_ending_loc
+
 	def initialize(bigram_file, words, models)
 		super()
 
-		@words = []
+		@words = words
 		@models = models
 		@bigram_file = bigram_file
 		@word_starting_loc = {}
@@ -231,7 +243,9 @@ class SentenceHMM < HMM
 
 		# modify the words array in place and set @words to that
 		# (need to add "sp" silence HMMs to the end of each word)
-		@words = words.each_value { |word| word = word + @models["sp"] }
+		#@words.each_pair do |key, word|
+		#	@words[key] = word + @models["sp"]
+		#end
 
 		# need to make a huge transition matrix from all of the words
 		# and use the bigram.txt to set the transitions between words
@@ -245,6 +259,10 @@ class SentenceHMM < HMM
 			copy_matrix(@state_transitions, word_hmm.state_transitions, offset)
 
 			# need a hash to store the starting location of each word
+			# have to subtract 2 because
+			#   1 for the fact that Array#length is 1 larger than indices
+			#   1 for the extra transition column (for the final state)
+			#      which is dropped
 			@word_ending_loc[offset+word_hmm.states.length-1] = word_name
 			@word_starting_loc[offset] = word_name
 			word_hmm.offset = offset
