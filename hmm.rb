@@ -1,4 +1,7 @@
 require 'matrix.rb'
+require './util.rb'
+
+
 
 class State
 	attr_accessor :mixtures
@@ -156,10 +159,158 @@ class HMM
 	end
 end
 
+class ModelManager
+	def initialize(options)
+		defaults options,
+			{:hmm_filename => "hmm.txt",
+			:word_filename => "dictionary.txt",
+			:input_folder => "tst",
+			:bigram_filename => "bigram.txt"}
 
-class SentenceHMM < HMM
-	def initialize(words)
-		@words = []
+
+		# HMM data structures
+		@models = []
 	end
 
+	def find_input_files_from(folder)
+		txtfiles = File.join(folder, "**", "*.txt")
+		Dir.glob(txtfiles)
+	end
+
+	# file I/O
+	def read_hmm_file(filename)
+		file = File.new(filename, "r")
+		model = HMM.new
+
+		while (line = file.gets)
+			if line =~ /^~(.+) "(.+)"/
+				model.switch_emission($2)
+			elsif line =~ /\<([A-Z]+)\>(.+)$/
+				if current_model
+					current_model.set($1, $2)
+				end
+			else
+				current_model.update_last(line.split(" ").map { |n| n.to_f }) if current_model
+			end
+		end
+		file.close
+
+		models
+	end
+
+	# multiple HMMs
+	# constructs an array of HMMs for each phoneme
+	def read_multi_hmm_file(filename)
+		file = File.new(filename, "r")
+		models = {}
+		current_model = nil
+
+		while (line = file.gets)
+			if line =~ /^~(.+) "(.+)"/
+				current_model = HMM.new
+				models[$2] = current_model
+			elsif line =~ /\<([A-Z]+)\>(.+)$/
+				if current_model
+					current_model.set($1, $2)
+				end
+			else
+				current_model.update_last(line.split(" ").map { |n| n.to_f }) if current_model
+			end
+		end
+		file.close
+
+		models
+	end
+
+	def make_hmm_words(filename, phonemes)
+		file = File.new(filename, "r")
+		word_hmms = {}
+
+		while (line = file.gets)
+			word, parts = line.split("\t")
+			#puts "word: #{word}"
+			#puts "parts: #{parts}"
+			word_hmms[word] = parts.split(" ").map{|p| phonemes[p]}.inject(:+)
+		end
+		word_hmms
+	end
+
+	def read_input_file(filename)
+		file = File.new(filename, "r")
+		inputs = []
+
+		header = file.gets
+		while (line = file.gets)
+			inputs << Matrix.column_vector(line.split(" ").map {|n| n.to_f})
+		end
+
+		inputs
+	end
+end
+
+class SentenceHMM < PhonemeHMM
+	def initialize(phonemes, word_file, bigram_file)
+		@words = []
+		@bigram_file = bigram_file
+		@word_starting_loc = {}
+		@word_ending_loc = {}
+
+		@words = @words.each_value { |word| word = word + @models["sp"] }
+
+		# need to make a huge transition matrix from all of the words
+		# and use the bigram.txt to set the transitions between words
+		@words["<s>"] = @models["sil"]
+		@words.each_pair { |word_name, word_hmm| @states += word_hmm.states }
+		@state_transitions = Array.new(@states.length) { Array.new(@states.length, 0) }
+
+		# copy each word's transition matrix to the new huge sentence HMM
+		offset = 0
+		@words.each_pair do |word_name, word_hmm|
+			copy_matrix(@state_transitions, word_hmm.state_transitions, offset)
+
+			# need a hash to store the starting location of each word
+			@word_ending_loc[offset+word_hmm.states.length-1] = word_name
+			@word_starting_loc[offset] = word_name
+			word_hmm.offset = offset
+
+			# state_transitions is 1 too large because it includes the end state
+			# (which does not actually exist)
+			offset += word_hmm.states.length
+		end
+
+		# now use the bigram file to set the transitions between words
+		file = File.new(@bigram_file, "r")
+
+		while (line = file.gets)
+			# tab delimited
+			parts = line.split("\t")
+			if parts.length == 3
+				# 	#transition_matrix[from_state][to_state] = value
+				# 	@word_transitions[from_word][to_word] = value
+				# 	# need to record what state words end so that we can find which words are being said later on
+
+				if @words[parts[0]]
+					# transition should be from the end of the word
+					from = @words[parts[0]].offset + @words[parts[0]].states.length - 1
+				end
+
+				if @words[parts[1]]
+					# transition should be to the beginning of the other word
+					to = @words[parts[1]].offset
+				end
+
+				# from and to will be nil if the line contains words that aren't in @words
+				if from and to
+					#if @sentence.state_transitions[from][to] == 0
+						trans = @words[parts[0]].end_transition
+						@state_transitions[from][to] = parts[2].to_f * trans
+					#else
+						# if it already exists, it must be the transition to
+						# the end state. need to 
+					#	@sentence.state_transitions[from][to] *= parts[2].to_f
+					#end
+				end
+			end
+		end
+	end
 end
